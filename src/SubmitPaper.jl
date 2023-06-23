@@ -48,6 +48,8 @@ function find_root_files(search_dir=pwd())
     return root_tex_files
 end
 
+
+export package
 function package_root(root_file, paper_directory=pwd(), destination_folder=joinpath(paper_directory, "submission"), force_overwrite=false)
     if !isdir(destination_folder)
         @info "Creating submission folder at $destination_folder"
@@ -79,7 +81,7 @@ function package_root(root_file, paper_directory=pwd(), destination_folder=joinp
     for (unique_text, figure_path) in figure_replacements
         figure_path = joinpath(paper_directory,figure_path)
         if !isfile(figure_path)
-            @error "Could not find $figure_path"
+            error("Could not find $figure_path")
         end
 
         filename = splitpath(figure_path)[end]
@@ -107,7 +109,7 @@ function check_circular_references(root_file)
     # TODO: Add checking of circular references
     has_circular_refs = false
     if has_circular_refs
-        @error "Could not create folder as the references are circular."
+        error("Could not create folder as the references are circular.")
     end
 
     nothing
@@ -177,13 +179,33 @@ function compile_paper(directory, root_file)
     nothing
 end
 
+"""
+    package(directory; [submission_dir, force_overwrite])
 
+Package up the LaTeX project in `directory` to be submitted. This will find the root
+document and merge all embedded (via `\\input`/`\\include`) `tex` files into a single 
+file. Changes all figure references (via `\\includegraphics`) to remove all nested
+directories and just point at the filename. Copies all figures from referenced 
+locations into the `submission_dir`, removing all nested folders. Writes the merged 
+file into the `submission_dir`. Then compiles the newly merged code using `latexmk`,
+and cleans up afterwards, leaving the `.bbl` file behind.
+
+## Optional Keyword Arguments:
+
+- `submission_dir`: By default is set to `directory/submission`. This is the folder
+  where submission files are copied. **DO NOT** set this to be equal to `directory`.
+- `force_overwrite`: Deletes all existing files in the `submission_dir` without asking.
+"""
 function package(directory=pwd(); submission_dir=joinpath(directory, "submission"), force_overwrite=false)
+    if abspath(directory) == abspath(submission_dir)
+        error("Must choose a different submission directory to the project directory supplied")
+
+    end
     root_files = find_root_files(directory)
     if length(root_files) > 1
-        @error "Detected too many root files, please ensure there is only one file with `\\documentclass` and `\\begin{document}`"
+        error("Detected too many root files, please ensure there is only one file with `\\documentclass` and `\\begin{document}`")
     elseif length(root_files) == 0
-        @error "Did not detect a root file in $directory"
+        error("Did not detect a root file in $directory")
     end
     root_file = root_files[begin]
     check_circular_references(root_file)
@@ -199,7 +221,5 @@ function package(directory=pwd(); submission_dir=joinpath(directory, "submission
     
     @info "Output available at $submission_dir."
 end
-
-export package
 
 end

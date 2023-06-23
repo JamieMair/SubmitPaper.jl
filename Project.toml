@@ -1,7 +1,7 @@
 name = "SubmitPaper"
 uuid = "efb0be97-3ee7-40d0-9fa9-b89a797c88dc"
 authors = ["Jamie Mair <JamieMair@users.noreply.github.com> and contributors"]
-version = "1.0.0-DEV"
+version = "0.1"
 
 [deps]
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"

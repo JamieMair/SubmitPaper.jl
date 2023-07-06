@@ -18,7 +18,7 @@ The main command will analyse a supplied directory for a $\LaTeX$ project and cr
 
 First, make sure you have Julia installed on your system. We recommend using `juliaup`(https://github.com/JuliaLang/juliaup) if you have not installed Julia already. Then, run the following command to install the `SubmitPaper.jl` package:
 ```bash
-julia -e 'using Pkg; Pkg.add(url="https://github.com/JamieMair/SubmitPaper.jl");'
+julia -e 'using Pkg; Pkg.add("SubmitPaper");'
 ```
 This will install to your global directory, allowing use of the package from anywhere.
 

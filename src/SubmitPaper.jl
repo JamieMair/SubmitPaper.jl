@@ -115,16 +115,53 @@ function check_circular_references(root_file)
     nothing
 end
 
-function parse_file(file, directory)
-    lines = readlines(joinpath(directory, file))
+# Strip the TeX comment portion from a single line (everything from the first
+# unescaped `%` onwards).  `\%` is a literal percent sign and is not treated
+# as a comment delimiter.
+function strip_tex_comment(line::AbstractString)::String
+    buf = IOBuffer()
+    i = firstindex(line)
+    while i <= lastindex(line)
+        c = line[i]
+        if c == '%'
+            # Check whether this % is escaped by a preceding backslash.
+            prev = prevind(line, i)
+            if prev >= firstindex(line) && line[prev] == '\\'
+                write(buf, c)
+            else
+                break  # rest of line is a comment — discard it
+            end
+        else
+            write(buf, c)
+        end
+        i = nextind(line, i)
+    end
+    return String(take!(buf))
+end
+
+function parse_file(file, directory, filepath_to_uuid=Dict{String,String}())
+    raw_lines = readlines(joinpath(directory, file))
 
     figure_replacements = Dict{String, String}() # uuid -> filepath
-    for (i, line) in enumerate(lines)
-        figure_match = match(r"\\includegraphics(?:\[.*\])?\{([^\}\{]*)\}", line)
-        
+    output_lines = String[]
+    for line in raw_lines
+        # Strip TeX comments from the line.  Lines that become empty after
+        # stripping (i.e. they were pure comment lines) are dropped entirely
+        # so they don't clutter the merged output.
+        line = strip_tex_comment(line)
+        isempty(strip(line)) && continue
+
+        figure_match = match(r"\\includegraphics(?:\[.*?\])?\{([^\}\{]*)\}", line)
+
         if !isnothing(figure_match)
             figure_filepath = figure_match.captures[begin]
-            figure_uuid = string(uuid4())
+            # Normalise to an absolute path as the deduplication key so that
+            # the same file referenced with different relative forms (e.g.
+            # "figures/fig.pdf" vs "./figures/fig.pdf") maps to one UUID.
+            abs_figure_filepath = abspath(joinpath(directory, figure_filepath))
+            figure_uuid = get!(filepath_to_uuid, abs_figure_filepath) do
+                string(uuid4())
+            end
             figure_replacements[figure_uuid] = figure_filepath
             line = replace(line, figure_filepath=>figure_uuid)
         end
@@ -136,7 +173,7 @@ function parse_file(file, directory)
             if !endswith(input_filepath, ".tex")
                 input_filepath = input_filepath * ".tex"
             end
-            replacement_text, nested_figure_replacements = parse_file(input_filepath, directory)
+            replacement_text, nested_figure_replacements = parse_file(input_filepath, directory, filepath_to_uuid)
             merge!(figure_replacements, nested_figure_replacements)
             line = replace(line, input_text=>replacement_text)
         end
@@ -147,15 +184,15 @@ function parse_file(file, directory)
             if !endswith(include_filepath, ".tex")
                 include_filepath = include_filepath * ".tex"
             end
-            replacement_text, nested_figure_replacements = parse_file(include_filepath, directory)
+            replacement_text, nested_figure_replacements = parse_file(include_filepath, directory, filepath_to_uuid)
             merge!(figure_replacements, nested_figure_replacements)
             line = replace(line, include_text=>"\\clearpage\n$replacement_text")
         end
 
-        lines[i] = line # update in the original lines
+        push!(output_lines, line)
     end
 
-    return join(lines, "\n"), figure_replacements
+    return join(output_lines, "\n"), figure_replacements
 
 end
 
@@ -215,13 +252,37 @@ function package(directory=pwd(); submission_dir=joinpath(directory, "submission
         @info "Copying $bib_file"
         cp(joinpath(directory, bib_file), joinpath(submission_dir, bib_file); force=true)
     end
+
+    # Only copy .sty/.bst files that are actually referenced in the merged tex,
+    # to avoid including leftover style files from previous conference versions.
+    merged_tex = read(joinpath(submission_dir, root_file), String)
+    referenced_pkgs = Set{String}()
+    for m in eachmatch(r"\\(?:usepackage|documentclass)(?:\[.*?\])?\{([^\}]+)\}", merged_tex)
+        for name in split(m.captures[1], ",")
+            push!(referenced_pkgs, strip(name))
+        end
+    end
     for sty_file in [f for f in readdir(directory) if splitext(f)[end] == ".sty"]
-        @info "Copying $sty_file"
-        cp(joinpath(directory, sty_file), joinpath(submission_dir, sty_file); force=true)
+        pkg_name = splitext(sty_file)[1]
+        if pkg_name in referenced_pkgs
+            @info "Copying $sty_file"
+            cp(joinpath(directory, sty_file), joinpath(submission_dir, sty_file); force=true)
+        else
+            @info "Skipping unreferenced $sty_file"
+        end
+    end
+    referenced_bst = Set{String}()
+    for m in eachmatch(r"\\bibliographystyle\{([^\}]+)\}", merged_tex)
+        push!(referenced_bst, strip(m.captures[1]))
     end
     for bst_file in [f for f in readdir(directory) if splitext(f)[end] == ".bst"]
-        @info "Copying $bst_file"
-        cp(joinpath(directory, bst_file), joinpath(submission_dir, bst_file); force=true)
+        bst_name = splitext(bst_file)[1]
+        if bst_name in referenced_bst
+            @info "Copying $bst_file"
+            cp(joinpath(directory, bst_file), joinpath(submission_dir, bst_file); force=true)
+        else
+            @info "Skipping unreferenced $bst_file"
+        end
     end
     @info "Compiling extracted package..."
     compile_paper(submission_dir, root_file)

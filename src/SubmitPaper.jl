@@ -78,32 +78,21 @@ function package_root(root_file, paper_directory=pwd(), destination_folder=joinp
 
     new_text, figure_replacements = parse_file(root_file, paper_directory)
     existing_figures = Set{String}()
-    figure_path_to_filename = Dict{String, String}()  # Track which filename each source path maps to
-    
     for (unique_text, figure_path) in figure_replacements
-        full_figure_path = joinpath(paper_directory, figure_path)
-        if !isfile(full_figure_path)
-            error("Could not find $full_figure_path")
+        figure_path = joinpath(paper_directory,figure_path)
+        if !isfile(figure_path)
+            error("Could not find $figure_path")
         end
 
-        # Check if we've already processed this figure path
-        if haskey(figure_path_to_filename, full_figure_path)
-            # Reuse the same filename for duplicate references
-            filename = figure_path_to_filename[full_figure_path]
-        else
-            # New figure - determine unique filename
-            filename = splitpath(full_figure_path)[end]
-            counter = 1
-            while filename in existing_figures
-                filebase, ext = splitext(filename)
-                filename = "$(filebase)_$(counter)$(ext)"
-                counter += 1
-            end
-            push!(existing_figures, filename)
-            figure_path_to_filename[full_figure_path] = filename
-            cp(full_figure_path, joinpath(destination_folder, filename); force=true)
+        filename = splitpath(figure_path)[end]
+        counter = 1
+        while filename in existing_figures
+            filebase, ext = splitext(filename)
+            filename = "$(filebase)_$(counter)$(ext)"
+            counter += 1
         end
-        
+        push!(existing_figures, filename)
+        cp(figure_path, joinpath(destination_folder, filename); force=true)
         new_text = replace(new_text, unique_text=>filename)
     end
 
@@ -111,18 +100,6 @@ function package_root(root_file, paper_directory=pwd(), destination_folder=joinp
     @info "Writing complete paper to $destination_filepath"
     open(destination_filepath, "w") do io
         println(io, new_text)
-    end
-
-    # Clean up unreferenced figure files
-    for file in readdir(destination_folder)
-        if !endswith(file, ".tex") && !endswith(file, ".bib") && !endswith(file, ".bst") && !endswith(file, ".sty")
-            # Check if this file is referenced in the final tex
-            file_without_ext = splitext(file)[1]
-            if !occursin(file_without_ext, new_text)
-                @info "Removing unreferenced file: $file"
-                rm(joinpath(destination_folder, file); force=true)
-            end
-        end
     end
 
     nothing
@@ -185,32 +162,20 @@ end
 function compile_paper(directory, root_file)
     # Works on windows I think
     compile_buffer = IOBuffer()
+    compile_cmd = Cmd(`latexmk -f -pdf -interaction=nonstopmode $root_file`, dir=directory)
+    run(pipeline(compile_cmd; stdout=compile_buffer))
+    bbl_file = first([joinpath(directory, f) for f in readdir(directory) if splitext(f)[end] == ".bbl"])
+    temp_bbl_file = bbl_file * ".tex"
+    mv(bbl_file, temp_bbl_file; force=true)
+    clean_cmd = Cmd(`latexmk -c`, dir=directory)
+    compile_buffer.writable = true
+    run(pipeline(clean_cmd; stdout=compile_buffer))
+    mv(temp_bbl_file, bbl_file; force=true)
     compilation_log_path = joinpath(directory, "latexmk_compilation_log.txt")
-    
-    try
-        compile_cmd = Cmd(`latexmk -f -pdf -interaction=nonstopmode $root_file`, dir=directory)
-        run(pipeline(compile_cmd; stdout=compile_buffer, stderr=compile_buffer))
-        bbl_file = first([joinpath(directory, f) for f in readdir(directory) if splitext(f)[end] == ".bbl"])
-        temp_bbl_file = bbl_file * ".tex"
-        mv(bbl_file, temp_bbl_file; force=true)
-        clean_cmd = Cmd(`latexmk -c`, dir=directory)
-        compile_buffer.writable = true
-        run(pipeline(clean_cmd; stdout=compile_buffer, stderr=compile_buffer))
-        mv(temp_bbl_file, bbl_file; force=true)
-        
-        # Success - delete the log file if it exists
-        if isfile(compilation_log_path)
-            rm(compilation_log_path; force=true)
-        end
-    catch e
-        # Failure - save the log file
-        @warn "Compilation failed. Saving logs to $compilation_log_path"
-        open(compilation_log_path, "w") do io
-            write(io, String(take!(compile_buffer)))
-        end
-        rethrow(e)
+    @info "Writing compilation logs to $compilation_log_path"
+    open(compilation_log_path, "w") do io
+        write(io, String(take!(compile_buffer)))
     end
-    
     nothing
 end
 
@@ -246,35 +211,13 @@ function package(directory=pwd(); submission_dir=joinpath(directory, "submission
     check_circular_references(root_file)
     @info "Packaging files starting at $root_file in $directory"
     package_root(root_file, directory, submission_dir, force_overwrite)
-    
-    # Read the merged main.tex to find referenced sty files
-    main_tex_path = joinpath(submission_dir, splitpath(root_file)[end])
-    main_tex_content = read(main_tex_path, String)
-    
-    # Remove comments from content (lines starting with % and inline comments)
-    # Handle escaped percent signs \% which should not be treated as comments
-    main_tex_uncommented = join([
-        let m = match(r"^((?:[^%]|\\%)*)(%.*)?$", line)
-            isnothing(m) ? line : m.captures[1]
-        end
-        for line in split(main_tex_content, '\n')
-    ], '\n')
-    
     for bib_file in [f for f in readdir(directory) if (splitext(f)[end] == ".bib") && (!contains(f, "Notes.bib"))]
         @info "Copying $bib_file"
         cp(joinpath(directory, bib_file), joinpath(submission_dir, bib_file); force=true)
     end
-    
-    # Only copy .sty files that are referenced in main.tex (and not commented out)
     for sty_file in [f for f in readdir(directory) if splitext(f)[end] == ".sty"]
-        sty_basename = splitext(sty_file)[1]
-        # Check for \usepackage{sty_file} or \RequirePackage{sty_file} in uncommented content
-        if occursin(Regex("\\\\(usepackage|RequirePackage)(?:\\[[^\\]]*\\])?\\{[^\\}]*\\b$(sty_basename)\\b[^\\}]*\\}"), main_tex_uncommented)
-            @info "Copying $sty_file (referenced in main.tex)"
-            cp(joinpath(directory, sty_file), joinpath(submission_dir, sty_file); force=true)
-        else
-            @info "Skipping $sty_file (not referenced in main.tex)"
-        end
+        @info "Copying $sty_file"
+        cp(joinpath(directory, sty_file), joinpath(submission_dir, sty_file); force=true)
     end
     for bst_file in [f for f in readdir(directory) if splitext(f)[end] == ".bst"]
         @info "Copying $bst_file"

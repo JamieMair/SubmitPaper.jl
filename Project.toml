@@ -1,7 +1,7 @@
 name = "SubmitPaper"
 uuid = "efb0be97-3ee7-40d0-9fa9-b89a797c88dc"
 authors = ["Jamie Mair <JamieMair@users.noreply.github.com> and contributors"]
-version = "0.2"
+version = "0.2.1"
 
 [deps]
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
@@ -9,6 +9,8 @@ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
 [compat]
 julia = "1.6"
+Logging = "1"
+UUIDs = "1"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
